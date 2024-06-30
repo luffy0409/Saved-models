@@ -1,89 +1,85 @@
-from flask import Flask, request, jsonify
-import tensorflow as tf
-import joblib
+import os
 import numpy as np
-import struct  # for reading binary data
+import pandas as pd
+import joblib
+from keras.models import load_model
+from gensim.models import Word2Vec
 from nltk.tokenize import word_tokenize
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# Load the BiLSTM model
-bilstm_model = tf.keras.models.load_model(r'C:\Users\dines\Downloads\dissertation\cnn_bilstm_model.h5')
+# Define the directory path
+drive_base_path = '/Saved-models'
 
-# Load the 1D CNN model
-cnn_model = tf.keras.models.load_model(r'C:\Users\dines\Downloads\dissertation\cnn_1d_model.h5')
+# Load models and preprocessors
+cnn_bilstm_model = load_model(os.path.join(drive_base_path, 'cnn_bilstm_model.h5'))
+cnn_1d_model = load_model(os.path.join(drive_base_path, 'cnn_1d_model.h5'))
+w2v_model = Word2Vec.load(os.path.join(drive_base_path, 'word2vec_model.bin'))
+scaler = joblib.load(os.path.join(drive_base_path, 'scaler.pkl'))
+imputer = joblib.load(os.path.join(drive_base_path, 'imputer.pkl'))
 
-# Load the scaler and imputer
-scaler = joblib.load(r'C:\Users\dines\Downloads\dissertation\scaler.pkl')
-imputer = joblib.load(r'C:\Users\dines\Downloads\dissertation\imputer.pkl')
-
-# Function to load Word2Vec embeddings from binary file
-def load_word2vec_model_binary(embeddings_path):
-    embeddings = {}
-    with open(embeddings_path, 'rb') as f:
-        # Read header: the first line contains the number of words and the vector dimension
-        header = f.readline()
-        vocab_size, vector_size = map(int, header.split())
-        binary_length = np.dtype(np.float32).itemsize * vector_size
-        for _ in range(vocab_size):
-            word = []
-            while True:
-                ch = f.read(1)
-                if ch == b' ':
-                    word = b''.join(word).decode('utf-8')
-                    break
-                if ch != b'\n':
-                    word.append(ch)
-            embeddings[word] = np.fromstring(f.read(binary_length), dtype=np.float32)
-    return embeddings
-
-# Load Word2Vec embeddings from .bin file
-word2vec_model_path = (r'C:\Users\dines\Downloads\dissertation\word2vec_model.bin')  # Replace with your Word2Vec embeddings .bin file path
-word2vec_model = load_word2vec_model_binary(word2vec_model_path)
-
-def preprocess_tweet(tweet, model, max_length):
-    # Tokenize the tweet
-    tokens = word_tokenize(tweet)
-    
-    # Convert tweet to embedding
-    embedding = tweet_to_embedding(tokens, model, max_length)
-    
-    return np.array([embedding])
-
+# Function to convert a tweet to its Word2Vec embeddings
 def tweet_to_embedding(tweet, model, max_length):
     embedding = []
     for word in tweet:
-        if word in model:
-            embedding.append(model[word])
+        if word in model.wv:
+            embedding.append(model.wv[word])
         else:
-            embedding.append(np.zeros(len(model['word'])))  # Use the length of vector for unknown words
+            embedding.append(np.zeros(model.vector_size))
     if len(embedding) < max_length:
-        embedding += [np.zeros(len(model['word']))] * (max_length - len(embedding))
+        embedding += [np.zeros(model.vector_size)] * (max_length - len(embedding))
     return np.array(embedding[:max_length])
 
-@app.route('/predict', methods=['POST'])
-def predict():
-    data = request.get_json()
-
-    # Extract text and numerical features from request
-    text = data.get('text')
-    numerical_features = np.array(data.get('numerical_features')).reshape(1, -1)
-
-    # Preprocess text
-    text_embedding = preprocess_tweet(text, word2vec_model, 100)
+# Function to preprocess new tweets
+def preprocess_tweet(tweet, w2v_model, max_length, followers, following, action):
+    tokens = word_tokenize(tweet)
+    embedding = tweet_to_embedding(tokens, w2v_model, max_length)
     
-    # Preprocess numerical features
+    # Numerical features
+    numerical_features = np.array([[followers, following, action]])
     numerical_features = imputer.transform(numerical_features)
     numerical_features = scaler.transform(numerical_features)
+    
+    return np.array([embedding]), numerical_features
 
-    # Make predictions with both models
-    bilstm_prediction = bilstm_model.predict([text_embedding, numerical_features])
-    cnn_prediction = cnn_model.predict([text_embedding, numerical_features])
+# Function to predict spam or not
+def predict_spam(tweet, cnn_bilstm_model, cnn_1d_model, w2v_model, max_length, followers, following, action):
+    tweet_embedding, numerical_features = preprocess_tweet(tweet, w2v_model, max_length, followers, following, action)
+    
+    bilstm_prediction = cnn_bilstm_model.predict([numerical_features, tweet_embedding])
+    cnn1d_prediction = cnn_1d_model.predict([tweet_embedding, numerical_features])
+    
+    final_prediction = (bilstm_prediction + cnn1d_prediction) / 2
+    is_spam = (final_prediction > 0.5).astype(int)
+    
+    return 'Spam' if is_spam else 'Not Spam'
 
-    return jsonify({
-        'bilstm_prediction': bilstm_prediction.tolist(),
-        'cnn_prediction': cnn_prediction.tolist()
-    })
+# Flask route for prediction
+@app.route('/', methods=['GET', 'POST'])
+def predict():
+    if request.method == 'POST':
+        new_tweet = request.form['tweet']
+        followers = float(request.form['followers'])
+        following = float(request.form['following'])
+        action = float(request.form['action'])
+        
+        max_length = 110  # Adjust based on your model's input requirements
+        result = predict_spam(new_tweet, cnn_bilstm_model, cnn_1d_model, w2v_model, max_length, followers, following, action)
+        return jsonify({'tweet': new_tweet, 'prediction': result})
+    return '''
+        <form method="post">
+            <label for="tweet">Enter your tweet:</label><br>
+            <input type="text" id="tweet" name="tweet"><br>
+            <label for="followers">Followers:</label><br>
+            <input type="number" id="followers" name="followers"><br>
+            <label for="following">Following:</label><br>
+            <input type="number" id="following" name="following"><br>
+            <label for="action">Action:</label><br>
+            <input type="number" id="action" name="action"><br>
+            <input type="submit" value="Predict">
+        </form>
+    '''
 
 if __name__ == '__main__':
-    app.run()
+    app.run(debug=True)
