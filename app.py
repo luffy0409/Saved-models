@@ -7,10 +7,16 @@ from gensim.models import Word2Vec
 from nltk.tokenize import word_tokenize
 from flask import Flask, request, jsonify
 
+
+# Download NLTK resources
+nltk.download('stopwords')
+nltk.download('punkt')
+nltk.download('wordnet')
+
 app = Flask(__name__)
 
 # Define the directory path
-drive_base_path = '/.'
+drive_base_path = '.'
 
 # Load models and preprocessors
 cnn_bilstm_model = load_model(os.path.join(drive_base_path, 'cnn_bilstm_model.h5'))
