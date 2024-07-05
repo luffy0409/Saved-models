@@ -17,7 +17,7 @@ nltk.download('wordnet')
 app = Flask(__name__)
 
 # Define the directory path
-drive_base_path = '.'
+drive_base_path = '/path/to/your_directory'
 
 # Load models and preprocessors
 cnn_bilstm_model = load_model(os.path.join(drive_base_path, 'cnn_bilstm_model.h5'))
@@ -27,17 +27,21 @@ scaler = joblib.load(os.path.join(drive_base_path, 'scaler.pkl'))
 imputer = joblib.load(os.path.join(drive_base_path, 'imputer.pkl'))
 
 # Load custom BERT tokenizer and model
-tokenizer = BertTokenizer.from_pretrained(os.path.join(drive_base_path, 'tokenizer'))
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 bert_model = BertModel.from_pretrained('bert-base-uncased')
 
 # Load the custom BERT model state dictionary
 custom_bert_state_dict = torch.load(os.path.join(drive_base_path, 'custom_bert_model.pth'), map_location=torch.device('cpu'))
 
+# Load the optimizer state dictionary for BERT
+optimizer_state_dict = torch.load(os.path.join(drive_base_path, 'optimizer.pth'), map_location=torch.device('cpu'))
+
 # Extract only the keys relevant to the BERT model
 bert_state_dict = {k.replace('bert.', ''): v for k, v in custom_bert_state_dict.items() if k.startswith('bert.')}
 
-# Load the state dictionary into the BERT model
+# Load the state dictionaries into the BERT model and optimizer
 bert_model.load_state_dict(bert_state_dict)
+optimizer.load_state_dict(optimizer_state_dict)
 
 # Set the model to evaluation mode
 bert_model.eval()
